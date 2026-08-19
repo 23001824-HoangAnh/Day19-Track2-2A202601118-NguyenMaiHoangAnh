@@ -95,6 +95,17 @@ if res.stderr:
     print(res.stderr)
 assert res.returncode == 0, f"feast apply failed: {res.stderr}"
 
+list_res = subprocess.run(
+    ["feast", "feature-views", "list"],
+    cwd=str(FEAST_DIR),
+    capture_output=True, text=True, check=False,
+)
+print("REGISTERED FEATURE VIEWS:")
+print(list_res.stdout)
+assert list_res.returncode == 0, f"feature-views list failed: {list_res.stderr}"
+expected_views = {"user_profile_features", "item_popularity_features", "query_velocity_features"}
+assert all(name in list_res.stdout for name in expected_views), list_res.stdout
+
 # %% [markdown]
 # ## 3. `feast materialize-incremental` — load offline → online
 #
@@ -160,10 +171,21 @@ for i in range(100):
     ).to_dict()
     latencies.append((time.perf_counter() - t0) * 1000)
 
-latencies.sort()
-p50 = latencies[50]
-p95 = latencies[95]
-p99 = latencies[99]
+def percentile(values: list[float], p: float) -> float:
+    """Linear percentile using the standard (n - 1) * p rank."""
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    rank = (len(ordered) - 1) * p
+    lower = int(rank)
+    upper = min(lower + 1, len(ordered) - 1)
+    weight = rank - lower
+    return ordered[lower] * (1 - weight) + ordered[upper] * weight
+
+
+p50 = percentile(latencies, 0.50)
+p95 = percentile(latencies, 0.95)
+p99 = percentile(latencies, 0.99)
 print(f"Online lookup latency over 100 calls:")
 print(f"  P50 = {p50:.2f}ms")
 print(f"  P95 = {p95:.2f}ms")
@@ -185,7 +207,7 @@ else:
 import pandas as pd
 entity_df = pd.DataFrame({
     "user_id": ["u_001", "u_002", "u_003"],
-    "event_timestamp": [NOW - timedelta(hours=2), NOW - timedelta(hours=1), NOW],
+    "event_timestamp": [NOW, NOW - timedelta(hours=1), NOW - timedelta(hours=2)],
 })
 
 historical = fs.get_historical_features(
@@ -196,6 +218,7 @@ historical = fs.get_historical_features(
     ],
 ).to_df()
 print(historical)
+assert historical.shape[0] == 3, f"expected 3 PIT rows, got {historical.shape[0]}"
 
 # %% [markdown]
 # ## Deliverable evidence
